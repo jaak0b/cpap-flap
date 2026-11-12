@@ -127,6 +127,7 @@ All are optional; the defaults are shown.
 #timeout: 60        # seconds before a scan is killed (result: fail-safe 100 %)
 #fan: fan           # printer object of the blower
 #servo: cpap_flap   # name of the flap [servo ...]
+#mpc_blower: variable   # variable | constant, see section 6
 ```
 
 The macros in `printer_cfg_flap_block.cfg` assume the blower is `[fan]` and the servo is `cpap_flap`.
@@ -169,6 +170,14 @@ purpose: `S128` means 50 % blower-equivalent air. Outside flap mode, `M106` is t
 [extruder]
 cooling_fan: cpap_flap
 ```
+
+`mpc_blower` selects how MPC's fan speed maps to blower and flap:
+
+- `variable` (default): calibration speed *v* = blower PWM *v* with the flap at 100 % toolhead. Reported speed = blower
+  power × flap share.
+- `constant`: for setups that run the blower constant at `[fan] max_power` and only move the flap. Every calibration
+  point (including 0) runs the blower at `max_power` and sets the flap toolhead share to *v* (0 = all air to the
+  chamber). Reported speed = blower power / `max_power` × flap share, i.e. the flap share in a print.
 
 Then **re-calibrate MPC**, because the old fan table was measured on a different scale:
 

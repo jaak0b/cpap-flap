@@ -7,6 +7,7 @@
 #   #timeout: 60         # seconds before the scan process is killed
 #   #fan: fan            # printer object of the blower
 #   #servo: cpap_flap    # name of the flap [servo ...]
+#   #mpc_blower: variable # MPC cooling-fan mapping, see below
 #
 # then restart the Klipper SERVICE (Mainsail power menu -> Klipper, or
 # `sudo systemctl restart klipper`). A plain RESTART also picks up a plugin
@@ -47,6 +48,14 @@
 #     After switching `cooling_fan` to cpap_flap, re-run the MPC calibration
 #     with the CPAP_MPC_CALIBRATE macro (printer_cfg_flap_block.cfg): the
 #     old fan_ambient_transfer table was measured on a different scale.
+#
+# mpc_blower (MPC cooling-fan mapping, `[extruder] cooling_fan: cpap_flap`):
+#   variable (default): MPC_CALIBRATE speed v -> blower PWM ~ v with the flap
+#     at 100 % toolhead; reported speed = blower power * flap share.
+#   constant: for setups that run the blower constant at [fan] max_power and
+#     only move the flap. Every calibration point (also 0) runs the blower at
+#     max_power and sets the flap toolhead share = v (0 = all air to the
+#     chamber). Reported speed = blower power / max_power * flap share.
 #
 # Status (printer.cpap_flap.*): fan_max, max_s, m106_count, file,
 #   scan_time, valid, error, hotend_air
@@ -151,7 +160,8 @@ class MpcFanAdapter:
             logging.warning("cpap_flap: %s", msg, exc_info=True)
 
     def air(self, eventtime):
-        """Air at the hotend 0..1 = blower PWM power * flap toolhead share."""
+        """Air at the hotend 0..1 = blower PWM power * flap toolhead share
+        (mpc_blower constant: power relative to max_power)."""
         owner = self.owner
         pfan = owner.pfan
         if pfan is None:
@@ -173,6 +183,11 @@ class MpcFanAdapter:
             except Exception:
                 self._log_limited("share", "flap position unavailable -> 100 %")
                 share = 1.0
+        if owner.mpc_blower == "constant":
+            max_power = float(getattr(owner.real_fan, "max_power", 1.0))
+            if not max_power > 0.0:
+                return 0.0
+            power = _clamp01(power / max_power)
         return _clamp01(power * share)
 
     def get_status(self, eventtime):
@@ -340,6 +355,11 @@ class CpapFlap:
         self.timeout = config.getfloat("timeout", 60.0, minval=1.0)
         self.fan_name = config.get("fan", "fan")
         self.servo_name = config.get("servo", "cpap_flap")
+        self.mpc_blower = config.get("mpc_blower", "variable")
+        if self.mpc_blower not in ("variable", "constant"):
+            raise config.error(
+                "cpap_flap: mpc_blower must be 'variable' or 'constant'"
+            )
         self.child_target = _scan_child
         self.busy = False
         self.status = {}
@@ -441,7 +461,11 @@ class CpapFlap:
             )
         min_power = float(getattr(fan, "min_power", 0.0) or 0.0)
         max_power = float(getattr(fan, "max_power", 1.0) or 1.0)
-        req, share = blower_request(value, min_power, max_power)
+        if self.mpc_blower == "constant":
+            # blower always at full request (PWM = max_power), flap = value
+            req, share = 1.0, _clamp01(value)
+        else:
+            req, share = blower_request(value, min_power, max_power)
         angle = (1.0 - share) * self.servo_geometry[2]
         # public command path; MPC calls set_speed() from inside the
         # MPC_CALIBRATE command, so run_script_from_command is valid here
